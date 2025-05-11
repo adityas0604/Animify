@@ -159,7 +159,7 @@ router.post('/compile', authenticateToken, async (req, res) => {
     });
 
   } catch (err) {
-    console.error(err.message || err);
+    console.log(err.message || err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
