@@ -85,7 +85,7 @@ async def render(req: RenderRequest):
         if os.path.exists(script_path):
             os.remove(script_path)
 
-        media_subdirs = ["media/videos", "media/images", "media/texts"]
+        media_subdirs = ["media/videos", "media/images", "media/texts", "media/Tex"]
         for subdir in media_subdirs:
             if os.path.exists(subdir):
                 shutil.rmtree(subdir)
