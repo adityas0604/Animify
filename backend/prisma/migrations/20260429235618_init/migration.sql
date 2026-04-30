@@ -15,6 +15,7 @@ CREATE TABLE "Video" (
     "userId" TEXT NOT NULL,
     "prompt" TEXT NOT NULL,
     "filename" TEXT NOT NULL,
+    "script" TEXT NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Video_pkey" PRIMARY KEY ("id")
