@@ -5,18 +5,27 @@ const fs = require('fs');
 const path = require('path');
 const authenticateToken = require('../middleware/auth');
 const axios = require('axios');
-const AWS = require('aws-sdk');
+const { S3Client, DeleteObjectsCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 const prisma = new PrismaClient();
 const router = express.Router();
 
 const openai = require('../lib/openaiClient');
+const { sendCompileMessage } = require('../services/renderQueue');
 
-const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  region: process.env.AWS_REGION,
-});
+function getS3Client() {
+  return new S3Client({
+    region: process.env.AWS_REGION,
+    credentials:
+      process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY
+        ? {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          }
+        : undefined,
+  });
+}
 
 
 // GET /user/videos
@@ -125,25 +134,29 @@ router.post('/compile', authenticateToken, async (req, res) => {
     }
 
     const { filename } = response.data;
+    const bucket = process.env.S3_BUCKET_NAME;
+    const s3Client = getS3Client();
 
     // 4️⃣ Generate Streaming URL (for `<video>` tag)
-    const s3StreamParams = {
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: filename,
-      Expires: 3600 // 1 hour
-    };
-
-    const streamingUrl = s3.getSignedUrl('getObject', s3StreamParams);
+    const streamingUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: filename,
+      }),
+      { expiresIn: 3600 }
+    );
 
     // 5️⃣ Generate Download URL (forces download)
-    const s3DownloadParams = {
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: filename,
-      Expires: 3600,
-      ResponseContentDisposition: `attachment; filename="${filename.split('/').pop()}"`
-    };
-
-    const downloadUrl = s3.getSignedUrl('getObject', s3DownloadParams);
+    const downloadUrl = await getSignedUrl(
+      s3Client,
+      new GetObjectCommand({
+        Bucket: bucket,
+        Key: filename,
+        ResponseContentDisposition: `attachment; filename="${filename.split('/').pop()}"`,
+      }),
+      { expiresIn: 3600 }
+    );
 
     // 6️⃣ Update the video's filename in DB
     await prisma.video.update({
@@ -163,7 +176,40 @@ router.post('/compile', authenticateToken, async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-module.exports = router;
+
+// POST /user/compileV2 — enqueue render job on SQS (async pipeline; does not wait for Manim)
+router.post('/compileV2', authenticateToken, async (req, res) => {
+  const { videoId, script, sceneName } = req.body;
+  const userId = req.user.userId;
+
+  if (!videoId || script == null || typeof script !== 'string' || !sceneName) {
+    return res.status(400).json({
+      error: 'videoId, script, and sceneName are required in the request body',
+    });
+  }
+
+  try {
+    const video = await prisma.video.findUnique({ where: { id: videoId } });
+
+    if (!video || video.userId !== userId) {
+      return res.status(403).json({ error: 'Unauthorized or video not found' });
+    }
+
+    const result = await sendCompileMessage({ videoId, script, sceneName });
+
+    return res.status(202).json({
+      success: true,
+      videoId,
+      messageId: result.MessageId,
+    });
+  } catch (err) {
+    console.error(err.message || err);
+    res.status(500).json({
+      error: 'Failed to enqueue compile job',
+      details: process.env.NODE_ENV === 'development' ? err.message : undefined,
+    });
+  }
+});
 
 // GET /user/prompts
 router.get('/prompts', authenticateToken, async (req, res) => {
@@ -234,22 +280,22 @@ router.delete('/clear-history', authenticateToken, async (req, res) => {
     // If you are storing the full S3 URL in `filename`, extract the key:
     const s3Keys = videos.map(video => video.filename);
 
-    // 🚀 Optional: Remove from S3 if you want (asynchronous)
-    if (s3Keys.length > 0) {
-      const deleteParams = {
-        Bucket: process.env.S3_BUCKET_NAME,
-        Delete: {
-          Objects: s3Keys.map(key => ({ Key: key }))
-        }
-      };
-      
-      s3.deleteObjects(deleteParams, (err, data) => {
-        if (err) {
-          console.error("Failed to delete from S3:", err);
-        } else {
-          console.log("Deleted from S3:", data);
-        }
-      });
+    const keysToDelete = s3Keys.filter((key) => key && typeof key === 'string');
+    const s3Client = getS3Client();
+    if (keysToDelete.length > 0) {
+      try {
+        await s3Client.send(
+          new DeleteObjectsCommand({
+            Bucket: process.env.S3_BUCKET_NAME,
+            Delete: {
+              Objects: keysToDelete.map((key) => ({ Key: key })),
+            },
+          })
+        );
+        console.log('Deleted from S3:', keysToDelete.length, 'objects');
+      } catch (err) {
+        console.error('Failed to delete from S3:', err);
+      }
     }
 
     // 🚀 Step 2: Remove all video records from the database

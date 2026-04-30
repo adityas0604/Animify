@@ -4,13 +4,16 @@
   "description": "This is the backend for the manim project.",
   "main": "app.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test-queue": "node scripts/test-queue-message.js"
   },
   "author": "Aditya Sharma",
   "license": "ISC",
   "dependencies": {
     "@prisma/client": "^6.7.0",
-    "aws-sdk": "^2.1692.0",
+    "@aws-sdk/client-s3": "^3.777.0",
+    "@aws-sdk/client-sqs": "^3.777.0",
+    "@aws-sdk/s3-request-presigner": "^3.777.0",
     "axios": "^1.9.0",
     "bcrypt": "^5.1.1",
     "body-parser": "^2.2.0",
