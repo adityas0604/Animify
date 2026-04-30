@@ -129,6 +129,7 @@ Animify/
 - **AWS** account with:
   - S3 bucket for video storage
   - SQS queue (`animify-render-queue`) + dead-letter queue (`animify-render-dlq`)
+  - Lambda function + API Gateway HTTP API (for the Express backend)
   - EC2 key pair (for worker deployment)
 - **OpenAI API** key (`gpt-4o-mini`)
 - **Manim Community Edition** + system deps (LaTeX, ffmpeg, Cairo) — on EC2 only for production
@@ -153,7 +154,11 @@ Animify/
 ### Frontend — `frontend/.env`
 
 ```bash
+# Local development
 VITE_API_URL=http://localhost:8000
+
+# Production — replace with your API Gateway invoke URL
+VITE_API_URL=https://<api-id>.execute-api.<region>.amazonaws.com
 ```
 
 ### Manim Worker — `manim-rendrer/.env`
@@ -220,7 +225,34 @@ Open **http://localhost:8080**, sign up, describe an animation, generate code, t
 
 ---
 
-## Production Deployment (EC2 Worker)
+## Production Deployment
+
+### API — Lambda + API Gateway
+
+The Express backend is wrapped with [`serverless-http`](https://github.com/dougmoscrop/serverless-http) and deployed as a Lambda function fronted by API Gateway. Every route in `backend/` runs as-is — no code changes required.
+
+```
+API Gateway HTTP API  →  Lambda (Express handler)  →  PostgreSQL / SQS / S3
+```
+
+The Lambda function needs these environment variables set (via Lambda console or IaC):
+
+| Variable | Value |
+|----------|-------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `JWT_SECRET` | JWT signing secret |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `AWS_REGION` | AWS region |
+| `S3_BUCKET_NAME` | S3 bucket name |
+| `SQS_QUEUE_URL` | SQS queue URL |
+
+> `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are not needed — attach an IAM execution role to the Lambda with `AmazonSQSFullAccess` and `AmazonS3FullAccess`.
+
+After deployment, set `VITE_API_URL` in the frontend to the API Gateway invoke URL.
+
+---
+
+### Worker — EC2
 
 The worker is deployed to EC2 using the Serverless Framework. It provisions the IAM role, security group, and EC2 instance — the instance bootstraps itself completely via UserData on first boot.
 
