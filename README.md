@@ -7,40 +7,47 @@ Animify ("Prompt to Animate") turns natural-language prompts into **Manim** anim
 ## Architecture
 
 ```
-┌─────────────┐        ┌──────────────────┐        ┌──────────────┐
-│   Frontend  │        │  Express Backend  │        │  PostgreSQL  │
-│  (React/TS) │──────▶ │    port 8000      │──────▶ │  (Prisma)    │
-│  port 8080  │        │                  │        └──────────────┘
-└─────────────┘        └────────┬─────────┘
-                                │
+┌─────────────┐        ┌──────────────────────────────────┐        ┌──────────────┐
+│   Frontend  │        │        AWS API Gateway           │        │  PostgreSQL  │
+│  (React/TS) │──────▶ │  (HTTP API — routes all /*)      │──────▶ │  (Prisma)    │
+│  port 8080  │        └───────────────┬──────────────────┘        └──────────────┘
+└─────────────┘                        │
+                                       │  invokes
+                                       ▼
+                          ┌────────────────────────┐
+                          │     AWS Lambda         │
+                          │  (Express via handler) │
+                          │   backend/app.js       │
+                          └────────────┬───────────┘
+                                       │
                     1. POST /user/generate
                        → OpenAI generates Manim script
                        → saved to DB (status: PENDING)
-                                │
+                                       │
                     2. POST /user/compile
                        → enqueue to SQS (videoId, sceneName)
                        → return { status: "queued" } immediately
-                                │
-                                ▼
-                       ┌────────────────┐
-                       │   AWS SQS      │
-                       │  render queue  │
-                       └───────┬────────┘
-                               │  long poll (20s)
-                               ▼
-                       ┌────────────────┐        ┌──────────────┐
-                       │  Manim Worker  │──────▶ │   AWS S3     │
-                       │  (EC2/Python)  │        │  (MP4 store) │
-                       │  worker.py     │        └──────────────┘
-                       └───────┬────────┘
-                               │
+                                       │
+                                       ▼
+                              ┌────────────────┐
+                              │   AWS SQS      │
+                              │  render queue  │
+                              └───────┬────────┘
+                                      │  long poll (20s)
+                                      ▼
+                              ┌────────────────┐        ┌──────────────┐
+                              │  Manim Worker  │──────▶ │   AWS S3     │
+                              │  (EC2/Python)  │        │  (MP4 store) │
+                              │  worker.py     │        └──────────────┘
+                              └───────┬────────┘
+                                      │
                     3. runs manim subprocess
                        uploads MP4 to S3
                        updates DB (status: DONE, filename: s3_key)
-                               │
-                               ▼
+                                      │
+                                      ▼
                     4. Frontend polls GET /user/videos/:id/status
-                       → status: DONE → backend returns presigned URLs
+                       → status: DONE → Lambda returns presigned URLs
                        → video streams in player
 ```
 
@@ -49,11 +56,21 @@ Animify ("Prompt to Animate") turns natural-language prompts into **Manim** anim
 | Component | Location | Role |
 |-----------|----------|------|
 | **Frontend** | `frontend/` | Chat UI, code viewer, video player. Polls render status after compile. |
-| **Backend** | `backend/` | Express on port 8000. JWT auth, OpenAI script generation, SQS producer, S3 presigned URLs. |
+| **API Gateway** | AWS API Gateway | HTTP API entry point. Routes all requests to the Lambda function. |
+| **Lambda** | AWS Lambda | Runs the Express app (`backend/`) as a serverless function. Handles auth, OpenAI generation, SQS enqueue, and presigned URLs. Scales to zero when idle. |
 | **Manim Worker** | `manim-rendrer/worker.py` | Long-polls SQS, runs `manim`, uploads MP4 to S3, updates DB status. Runs on EC2. |
 | **Database** | PostgreSQL via Prisma | `User` and `Video` models. `Video` tracks `status` (PENDING → QUEUED → PROCESSING → DONE / FAILED). |
 | **SQS Queue** | AWS SQS | Decouples compile requests from rendering. Messages retry automatically on failure, dead-letter after 3 attempts. |
-| **S3** | AWS S3 | Stores rendered MP4s. Backend generates 1-hour presigned URLs for streaming and download. |
+| **S3** | AWS S3 | Stores rendered MP4s. Lambda generates 1-hour presigned URLs for streaming and download. |
+
+### Why Lambda for the API
+
+The Express backend is stateless — every request reads from the DB, calls an external API (OpenAI / SQS / S3), and returns. This maps cleanly onto Lambda:
+
+- **No idle cost** — Lambda scales to zero between requests
+- **No server management** — no EC2 to patch or keep alive
+- **Automatic scaling** — concurrent requests spin up independent invocations
+- **Separation of concerns** — short-lived API work (Lambda) is cleanly separated from long-running render work (EC2 worker)
 
 ### Async Render Flow
 
