@@ -1,63 +1,158 @@
 # Animify
 
-Animify (“Prompt to Animate”) turns natural-language prompts into **Manim** animations. An Express API uses OpenAI to generate Python scene code, stores it in PostgreSQL, and orchestrates rendering through a small **FastAPI** service that runs Manim locally and uploads MP4s to **Amazon S3**. The web app is a **Vite + React + TypeScript** UI with auth, a chat-style prompt flow, code viewing, and video playback with download links.
+Animify ("Prompt to Animate") turns natural-language prompts into **Manim** animations. Users describe what they want, the system generates Python scene code via OpenAI, and an async render pipeline produces an MP4 uploaded to S3.
+
+---
 
 ## Architecture
 
-| Piece | Role |
-|--------|------|
-| **Frontend** (`frontend/`) | Landing page, login/signup, protected dashboard (chat, player, code viewer). Calls the API via `VITE_API_URL`. |
-| **Backend** (`backend/`) | Express on port **8000**: JWT auth, Prisma/PostgreSQL, OpenAI script generation, compile → calls renderer, S3 signed URLs. |
-| **Manim renderer** (`manim-rendrer/app.py`) | FastAPI on port **8001**: receives script + scene name, runs `manim`, uploads output to S3. |
-| **Database** | PostgreSQL via Prisma (`User`, `Video` with stored prompt + Manim script + S3 key). |
+```
+┌─────────────┐        ┌──────────────────┐        ┌──────────────┐
+│   Frontend  │        │  Express Backend  │        │  PostgreSQL  │
+│  (React/TS) │──────▶ │    port 8000      │──────▶ │  (Prisma)    │
+│  port 8080  │        │                  │        └──────────────┘
+└─────────────┘        └────────┬─────────┘
+                                │
+                    1. POST /user/generate
+                       → OpenAI generates Manim script
+                       → saved to DB (status: PENDING)
+                                │
+                    2. POST /user/compile
+                       → enqueue to SQS (videoId, sceneName)
+                       → return { status: "queued" } immediately
+                                │
+                                ▼
+                       ┌────────────────┐
+                       │   AWS SQS      │
+                       │  render queue  │
+                       └───────┬────────┘
+                               │  long poll (20s)
+                               ▼
+                       ┌────────────────┐        ┌──────────────┐
+                       │  Manim Worker  │──────▶ │   AWS S3     │
+                       │  (EC2/Python)  │        │  (MP4 store) │
+                       │  worker.py     │        └──────────────┘
+                       └───────┬────────┘
+                               │
+                    3. runs manim subprocess
+                       uploads MP4 to S3
+                       updates DB (status: DONE, filename: s3_key)
+                               │
+                               ▼
+                    4. Frontend polls GET /user/videos/:id/status
+                       → status: DONE → backend returns presigned URLs
+                       → video streams in player
+```
 
-Typical flow: user prompt → `/user/generate` (AI writes Manim code, saved as a `Video`) → user compiles → `/user/compile` → renderer produces MP4 → backend returns signed stream/download URLs.
+### Component Responsibilities
 
-## Prerequisites
+| Component | Location | Role |
+|-----------|----------|------|
+| **Frontend** | `frontend/` | Chat UI, code viewer, video player. Polls render status after compile. |
+| **Backend** | `backend/` | Express on port 8000. JWT auth, OpenAI script generation, SQS producer, S3 presigned URLs. |
+| **Manim Worker** | `manim-rendrer/worker.py` | Long-polls SQS, runs `manim`, uploads MP4 to S3, updates DB status. Runs on EC2. |
+| **Database** | PostgreSQL via Prisma | `User` and `Video` models. `Video` tracks `status` (PENDING → QUEUED → PROCESSING → DONE / FAILED). |
+| **SQS Queue** | AWS SQS | Decouples compile requests from rendering. Messages retry automatically on failure, dead-letter after 3 attempts. |
+| **S3** | AWS S3 | Stores rendered MP4s. Backend generates 1-hour presigned URLs for streaming and download. |
 
-- **Node.js** (for backend and frontend)
-- **PostgreSQL** and a `DATABASE_URL`
-- **Python 3** with [Manim Community Edition](https://www.manim.community/) installed and available as the `manim` CLI
-- **AWS** account with an S3 bucket and credentials that can upload objects and generate presigned GET URLs
-- **OpenAI API** key (backend uses `gpt-4o-mini` for script generation)
+### Async Render Flow
 
-## Repository layout
+```
+POST /user/compile
+       │
+       ├── validate ownership
+       ├── extract scene class name from script
+       ├── update Video.status = QUEUED
+       ├── sqs.sendMessage({ videoId, sceneName })
+       └── return { status: "queued", videoId }   ← responds in milliseconds
+
+                    (worker picks it up)
+
+worker.py loop
+       │
+       ├── sqs.receive_message (long poll, 20s wait)
+       ├── fetch script from DB by videoId
+       ├── update Video.status = PROCESSING
+       ├── subprocess: manim -ql script.py SceneName
+       ├── upload MP4 to S3
+       ├── update Video.status = DONE, filename = s3_key
+       └── sqs.delete_message   ← only on success; failure = auto-retry
+```
+
+---
+
+## Repository Layout
 
 ```
 Animify/
-├── frontend/          # Vite + React + TS + Tailwind (dev server: port 8080)
-├── backend/           # Express API + Prisma (port 8000)
-├── manim-rendrer/     # FastAPI + Manim render worker (port 8001)
-└── infrastructure/    # Optional infra (e.g. database-related definitions)
+├── frontend/               # Vite + React + TypeScript + Tailwind (port 8080)
+├── backend/                # Express API + Prisma ORM (port 8000)
+│   ├── routes/
+│   │   ├── auth.js         # POST /auth/signup, /auth/login
+│   │   └── user.js         # All /user/* routes
+│   ├── prisma/
+│   │   └── schema.prisma   # User, Video models
+│   └── lib/
+│       └── openaiClient.js
+├── manim-rendrer/          # Render worker (EC2)
+│   ├── worker.py           # SQS consumer — main production worker
+│   ├── app.py              # FastAPI render endpoint (local dev only)
+│   └── requirements.txt
+├── serverless.yml          # EC2 worker deployment (Serverless Framework)
+└── EC2_WORKER_DEPLOYMENT.md
 ```
 
-## Environment variables
+---
 
-### Backend (`backend/.env`)
+## Prerequisites
 
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string for Prisma |
-| `JWT_SECRET` | Secret for signing JWTs (login/signup) |
+- **Node.js** 18+
+- **Python** 3.10+
+- **PostgreSQL** database
+- **AWS** account with:
+  - S3 bucket for video storage
+  - SQS queue (`animify-render-queue`) + dead-letter queue (`animify-render-dlq`)
+  - EC2 key pair (for worker deployment)
+- **OpenAI API** key (`gpt-4o-mini`)
+- **Manim Community Edition** + system deps (LaTeX, ffmpeg, Cairo) — on EC2 only for production
+
+---
+
+## Environment Variables
+
+### Backend — `backend/.env`
+
+| Variable | Description |
+|----------|-------------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `JWT_SECRET` | Secret used to sign JWTs |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION` | AWS credentials for S3 |
-| `S3_BUCKET_NAME` | Bucket for rendered videos |
+| `AWS_ACCESS_KEY_ID` | AWS credentials |
+| `AWS_SECRET_ACCESS_KEY` | AWS credentials |
+| `AWS_REGION` | AWS region (e.g. `us-east-1`) |
+| `S3_BUCKET_NAME` | S3 bucket for rendered videos |
+| `SQS_QUEUE_URL` | SQS queue URL — get this after creating the queue |
 
-The compile route expects the Manim service at `http://localhost:8001` (see `routes/user.js`).
-
-### Frontend
-
-Create `frontend/.env` (or `.env.local`) with:
+### Frontend — `frontend/.env`
 
 ```bash
 VITE_API_URL=http://localhost:8000
 ```
 
-### Manim renderer (`manim-rendrer`)
+### Manim Worker — `manim-rendrer/.env`
 
-Use the same AWS variables as in `app.py`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `S3_BUCKET_NAME`. Install dependencies (e.g. `fastapi`, `uvicorn`, `boto3`, `python-dotenv`) plus Manim and LaTeX dependencies as required by your Manim install.
+| Variable | Description |
+|----------|-------------|
+| `SQS_QUEUE_URL` | Same SQS queue URL as the backend |
+| `DATABASE_URL` | Same PostgreSQL connection string |
+| `S3_BUCKET_NAME` | Same S3 bucket |
+| `AWS_REGION` | AWS region |
 
-## Database
+> **Note:** `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are not needed on EC2 — the IAM instance role handles authentication automatically.
+
+---
+
+## Database Setup
 
 From `backend/`:
 
@@ -67,49 +162,106 @@ npx prisma generate
 npx prisma migrate deploy
 ```
 
-For local iteration you can use `npx prisma migrate dev` instead of `deploy`.
+The `Video` model tracks render state via a `status` field:
 
-## Running locally
+| Status | Meaning |
+|--------|---------|
+| `PENDING` | Script generated, not yet submitted for render |
+| `QUEUED` | Message sent to SQS, waiting for a worker |
+| `PROCESSING` | Worker picked it up, Manim is running |
+| `DONE` | MP4 uploaded to S3, presigned URLs available |
+| `FAILED` | Render failed after retries; see `errorMsg` field |
 
-Run all three processes (three terminals):
+---
 
-1. **PostgreSQL** reachable at `DATABASE_URL`.
+## Running Locally
 
-2. **Backend** (port 8000):
+For local development the worker can be run directly (without SQS) using the FastAPI renderer.
 
-   ```bash
-   cd backend && npm install && node app.js
-   ```
+**1. Start PostgreSQL** at `DATABASE_URL`.
 
-3. **Manim renderer** (port 8001), from `manim-rendrer/`:
+**2. Backend** (port 8000):
+```bash
+cd backend && npm install && node app.js
+```
 
-   ```bash
-   uvicorn app:app --reload --port 8001
-   ```
+**3. Manim renderer** (port 8001) — local dev only, bypasses SQS:
+```bash
+cd manim-rendrer
+pip install -r requirements.txt
+uvicorn app:app --reload --port 8001
+```
 
-4. **Frontend** (port 8080):
+**4. Frontend** (port 8080):
+```bash
+cd frontend && npm install && npm run dev
+```
 
-   ```bash
-   cd frontend && npm install && npm run dev
-   ```
+Open **http://localhost:8080**, sign up, describe an animation, generate code, then compile.
 
-Open the URL Vite prints (default **http://localhost:8080**). Sign up or log in, open the dashboard, describe an animation, generate code, then compile to render and stream from S3.
+> For local dev the backend's `/user/compile` still calls the FastAPI renderer directly if you haven't set `SQS_QUEUE_URL`. Set it to use the full async flow locally too.
 
-## API overview (authenticated routes use `Authorization: Bearer <token>`)
+---
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/auth/signup` | Register; returns JWT |
-| POST | `/auth/login` | Login; returns JWT |
-| GET | `/user/videos` | List current user’s videos |
-| GET | `/user/prompts` | Prompt/video history for chat |
-| POST | `/user/generate` | Body: `{ prompt }` → AI Manim script + new `videoId` |
-| POST | `/user/compile` | Body: `{ videoId }` → render + signed `videoUrl` / `downloadUrl` |
-| GET | `/user/code?videoId=` | Fetch stored Manim script |
-| DELETE | `/user/clear-history` | Clear user videos (and attempts S3 deletes for stored keys) |
+## Production Deployment (EC2 Worker)
 
-Static dev path `/videos` serves generated media from disk only for local use; production should rely on S3 URLs.
+The worker is deployed to EC2 using the Serverless Framework. It provisions the IAM role, security group, and EC2 instance — the instance bootstraps itself completely via UserData on first boot.
 
-## License
+**Install Serverless Framework:**
+```bash
+npm install -g serverless
+```
 
-See package metadata in `backend/package.json` / `frontend/package.json` where applicable.
+**Deploy:**
+```bash
+serverless deploy \
+  --param="repoUrl=https://github.com/your-org/animify" \
+  --param="databaseUrl=postgresql://user:pass@host:5432/dbname" \
+  --param="s3BucketName=your-s3-bucket" \
+  --param="sqsQueueUrl=https://sqs.us-east-1.amazonaws.com/account-id/animify-render-queue" \
+  --param="keyPairName=your-ec2-keypair"
+```
+
+The stack output prints the instance public IP. The worker starts automatically — no SSH required.
+
+**Verify it's running:**
+```bash
+ssh -i your-key.pem ubuntu@<InstancePublicIp>
+sudo systemctl status animify-worker
+sudo journalctl -u animify-worker -f   # live logs
+```
+
+**Tear down:**
+```bash
+serverless remove
+```
+
+See `EC2_WORKER_DEPLOYMENT.md` for a full step-by-step guide including SQS queue setup.
+
+---
+
+## API Reference
+
+All `/user/*` routes require `Authorization: Bearer <token>`.
+
+| Method | Path | Body / Params | Response |
+|--------|------|---------------|----------|
+| POST | `/auth/signup` | `{ email, username, password }` | `{ token }` |
+| POST | `/auth/login` | `{ email, password }` | `{ token }` |
+| GET | `/user/videos` | — | Array of user videos |
+| GET | `/user/prompts` | — | Prompt history for chat UI |
+| POST | `/user/generate` | `{ prompt }` | `{ videoId, script }` |
+| POST | `/user/compile` | `{ videoId }` | `{ status: "queued", videoId }` |
+| GET | `/user/videos/:id/status` | — | `{ status, videoUrl?, downloadUrl?, error? }` |
+| GET | `/user/code?videoId=` | — | `{ script }` |
+| DELETE | `/user/clear-history` | — | Deletes all videos + S3 objects |
+
+### Compile + Poll Pattern
+
+```
+POST /user/compile       → { status: "queued", videoId }
+GET  /user/videos/:id/status  (poll every 3s)
+  → { status: "QUEUED" }
+  → { status: "PROCESSING" }
+  → { status: "DONE", videoUrl: "...", downloadUrl: "..." }
+```
