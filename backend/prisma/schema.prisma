@@ -29,7 +29,9 @@ model Video {
   userId    String
   prompt    String
   filename  String
-  script    String   // ← Store the generated Manim code here
+  script    String
+  status    String   @default("DONE")
+  errorMsg  String?
   createdAt DateTime @default(now())
 }
 
