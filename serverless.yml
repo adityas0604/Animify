@@ -1,0 +1,142 @@
+service: animify-worker
+frameworkVersion: '3'
+
+# Deploy with:
+#
+#   serverless deploy \
+#     --param="repoUrl=https://github.com/your-org/animify" \
+#     --param="databaseUrl=postgresql://user:pass@host:5432/dbname" \
+#     --param="s3BucketName=your-s3-bucket" \
+#     --param="sqsQueueUrl=https://sqs.us-east-1.amazonaws.com/account-id/animify-render-queue" \
+#     --param="keyPairName=your-ec2-keypair"
+#
+# Tear down with:
+#   serverless remove
+
+provider:
+  name: aws
+  region: ${opt:region, 'us-east-1'}
+
+params:
+  default:
+    instanceType: t3.medium
+    sshCidr: 0.0.0.0/0       # Restrict to your IP in production: x.x.x.x/32
+    repoUrl: ''               # REQUIRED — GitHub repo URL
+    databaseUrl: ''           # REQUIRED — PostgreSQL connection string
+    s3BucketName: ''          # REQUIRED — S3 bucket for video storage
+    sqsQueueUrl: ''           # REQUIRED — SQS queue URL
+    keyPairName: ''           # REQUIRED — EC2 key pair name (must exist in AWS)
+
+resources:
+  Resources:
+
+    # ── IAM Role ───────────────────────────────────────────────────────────────
+    # EC2 uses this role — no AWS keys needed in .env
+    WorkerInstanceRole:
+      Type: AWS::IAM::Role
+      Properties:
+        RoleName: animify-worker-role
+        AssumeRolePolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Principal:
+                Service: ec2.amazonaws.com
+              Action: sts:AssumeRole
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/AmazonSQSFullAccess
+          - arn:aws:iam::aws:policy/AmazonS3FullAccess
+
+    WorkerInstanceProfile:
+      Type: AWS::IAM::InstanceProfile
+      Properties:
+        InstanceProfileName: animify-worker-profile
+        Roles:
+          - !Ref WorkerInstanceRole
+
+    # ── Security Group ─────────────────────────────────────────────────────────
+    WorkerSecurityGroup:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Animify worker — SSH only
+        SecurityGroupIngress:
+          - IpProtocol: tcp
+            FromPort: 22
+            ToPort: 22
+            CidrIp: ${param:sshCidr}
+
+    # ── EC2 Instance ───────────────────────────────────────────────────────────
+    WorkerInstance:
+      Type: AWS::EC2::Instance
+      Properties:
+        InstanceType: ${param:instanceType}
+        # Always resolves to the latest Ubuntu 22.04 LTS AMI in the deployed region
+        ImageId: '{{resolve:ssm:/aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id}}'
+        KeyName: ${param:keyPairName}
+        IamInstanceProfile: !Ref WorkerInstanceProfile
+        SecurityGroups:
+          - !Ref WorkerSecurityGroup
+        Tags:
+          - Key: Name
+            Value: animify-worker
+        # UserData runs once on first boot and sets everything up automatically.
+        UserData:
+          Fn::Base64: |
+            #!/bin/bash
+            set -e
+            exec > /var/log/userdata.log 2>&1
+
+            # ── System dependencies ────────────────────────────────────────
+            apt-get update -y
+            DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                python3-pip python3-venv git ffmpeg \
+                libcairo2-dev libpango1.0-dev \
+                texlive texlive-latex-extra pkg-config
+
+            # ── Clone repo ─────────────────────────────────────────────────
+            cd /home/ubuntu
+            git clone ${param:repoUrl} animify
+
+            # ── Write .env ─────────────────────────────────────────────────
+            cd /home/ubuntu/animify/manim-rendrer
+            cat > .env <<EOF
+            SQS_QUEUE_URL=${param:sqsQueueUrl}
+            DATABASE_URL=${param:databaseUrl}
+            S3_BUCKET_NAME=${param:s3BucketName}
+            AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+            EOF
+
+            # ── Python environment ─────────────────────────────────────────
+            python3 -m venv venv
+            venv/bin/pip install -r requirements.txt
+
+            chown -R ubuntu:ubuntu /home/ubuntu/animify
+
+            # ── systemd service ────────────────────────────────────────────
+            cat > /etc/systemd/system/animify-worker.service <<SERVICE
+            [Unit]
+            Description=Animify Manim Render Worker
+            After=network.target
+
+            [Service]
+            User=ubuntu
+            WorkingDirectory=/home/ubuntu/animify/manim-rendrer
+            ExecStart=/home/ubuntu/animify/manim-rendrer/venv/bin/python worker.py
+            Restart=always
+            RestartSec=5
+            EnvironmentFile=/home/ubuntu/animify/manim-rendrer/.env
+
+            [Install]
+            WantedBy=multi-user.target
+            SERVICE
+
+            systemctl daemon-reload
+            systemctl enable animify-worker
+            systemctl start animify-worker
+
+  # ── Stack Outputs ──────────────────────────────────────────────────────────
+  Outputs:
+
+    InstancePublicIp:
+      Description: SSH into the worker — ssh -i your-key.pem ubuntu@<this-ip>
+      Value: !GetAtt WorkerInstance.PublicIp
