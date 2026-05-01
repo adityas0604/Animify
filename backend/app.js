@@ -1,7 +1,6 @@
 // backend/app.js
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 
 const authRoutes = require('./routes/auth');     // Signup/Login
 const userRoutes = require('./routes/user');     // Authenticated user actions (generate/compile/videos)
@@ -10,7 +9,7 @@ const app = express();
 const PORT = 8000;
 
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
 // Public routes
 app.use('/auth', authRoutes);

@@ -3,7 +3,6 @@
 const serverless = require('serverless-http');
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
 
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
@@ -11,7 +10,7 @@ const userRoutes = require('./routes/user');
 function makeHandler(mountPath, router) {
   const app = express();
   app.use(cors());
-  app.use(bodyParser.json());
+  app.use(express.json());
   app.use(mountPath, router);
   return serverless(app);
 }
