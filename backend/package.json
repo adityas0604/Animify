@@ -23,8 +23,10 @@
     "serverless-http": "^3.2.0"
   },
   "devDependencies": {
+    "esbuild": "^0.21.0",
     "serverless": "^3.40.0",
     "serverless-dotenv-plugin": "^6.0.0",
+    "serverless-esbuild": "^1.52.0",
     "serverless-offline": "^14.5.0",
     "serverless-plugin-scripts": "^1.0.2"
   }

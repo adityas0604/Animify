@@ -38,23 +38,39 @@ provider:
           Resource: arn:aws:s3:::${env:S3_BUCKET_NAME}/*
 
 plugins:
+  - serverless-esbuild
   - serverless-offline
   - serverless-plugin-scripts
 
 custom:
-  # Regenerates the Prisma query engine binary for Lambda (AL2023 / OpenSSL 3)
-  # before the deployment package is assembled.
+  esbuild:
+    bundle: true
+    minify: false
+    sourcemap: false
+    target: node20
+    platform: node
+    packager: npm
+    # @prisma/client contains a native query-engine binary — esbuild cannot
+    # bundle native code, so we mark it external and copy the files manually.
+    external:
+      - '@prisma/client'
+      - '.prisma/client'
+    copyFiles:
+      - from: 'node_modules/.prisma'
+        to: 'node_modules/.prisma'
+
   scripts:
     hooks:
+      # Must run before esbuild bundles so the correct Lambda binary is present.
       'before:package:createDeploymentArtifacts': npx prisma generate
 
 package:
+  individually: true
   patterns:
     - '!.env'
     - '!*.md'
     - '!generated/**'
     - '!manim/**'
-    - '!node_modules/.bin/**'
     - '!prisma/migrations/**'
 
 functions:
