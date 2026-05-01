@@ -47,6 +47,14 @@ dist-ssr/
 *.local
 coverage/
 
+# ── AWS Amplify CLI (Gen1 — local cache & CFN build output) ─────
+# Folder name is literally #current-cloud-backend; escape leading # in .gitignore patterns.
+**/amplify/\#current-cloud-backend/
+**/amplify/.config/local-*
+**/amplify/backend/awscloudformation/build/
+**/amplify/logs/
+**/amplify/mock-data/
+
 # ── Backend / tooling ──────────────────────────────────────────
 .serverless/
 .esbuild/
