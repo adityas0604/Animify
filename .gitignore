@@ -93,3 +93,5 @@ logs/
 # ── Optional local SQLite / Prisma file DB ─────────────────────
 **/prisma/*.db
 **/prisma/*.db-journal
+
+EC2_WORKER_DEPLOYMENT.md
