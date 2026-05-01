@@ -1,6 +1,5 @@
-service: animify-api
-frameworkVersion: '3'
-
+service: animify-backend-api
+useDotenv: true
 # Reads all variables from backend/.env automatically via serverless-dotenv-plugin.
 #
 # Required .env keys:
@@ -39,7 +38,6 @@ provider:
           Resource: arn:aws:s3:::${env:S3_BUCKET_NAME}/*
 
 plugins:
-  - serverless-dotenv-plugin
   - serverless-offline
   - serverless-plugin-scripts
 
