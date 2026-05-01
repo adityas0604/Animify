@@ -44,6 +44,8 @@ plugins:
 
 custom:
   esbuild:
+    # Default is exclude: ['aws-sdk'] — Node 18+/20 Lambda no longer provides v2 SDK.
+    exclude: []
     bundle: true
     minify: false
     sourcemap: false
@@ -55,9 +57,6 @@ custom:
     external:
       - '@prisma/client'
       - '.prisma/client'
-    copyFiles:
-      - from: 'node_modules/.prisma'
-        to: 'node_modules/.prisma'
 
   scripts:
     hooks:
@@ -72,6 +71,8 @@ package:
     - '!generated/**'
     - '!manim/**'
     - '!prisma/migrations/**'
+    # Prisma query engine (external to esbuild) — must be in the zip
+    - 'node_modules/.prisma/**'
 
 functions:
 

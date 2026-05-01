@@ -1,5 +1,5 @@
 const express = require("express");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { PrismaClient } = require("@prisma/client");
 
@@ -26,6 +26,7 @@ router.post("/signup", async (req, res) => {
 
 // Login
 router.post("/login", async (req, res) => {
+  
   const { email, password } = req.body;
 
   const user = await prisma.user.findUnique({ where: { email } });
