@@ -1,3 +1,86 @@
+# Animify — root ignore rules (covers frontend/, backend/, manim-rendrer/)
+
+# ── Secrets & credentials ─────────────────────────────────────
 .env
-node_modules
-package-lock.json
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+
+# Local overrides only (committed guide stays: EC2_WORKER_DEPLOYMENT.md)
+EC2_WORKER_DEPLOYMENT
+EC2_WORKER_DEPLOYMENT/
+
+# ── OS ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Editors & IDEs ─────────────────────────────────────────────
+.idea/
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+.vscode/
+!.vscode/extensions.json
+
+# ── Node.js (npm / yarn / pnpm) ───────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pnpm-store/
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# Commit lockfiles (package-lock.json, yarn.lock) for reproducible installs.
+
+# ── Frontend (Vite) ────────────────────────────────────────────
+dist/
+dist-ssr/
+*.local
+coverage/
+
+# ── Backend / tooling ──────────────────────────────────────────
+.serverless/
+.esbuild/
+**/coverage/
+
+# ── Python (Manim worker) ─────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg
+MANIFEST
+
+# ── Local media / build artifacts ──────────────────────────────
+**/generated/media/
+**/tmp/
+*.log
+logs/
+
+# ── Terraform (if used under repo) ────────────────────────────
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+
+# ── Optional local SQLite / Prisma file DB ─────────────────────
+**/prisma/*.db
+**/prisma/*.db-journal

@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import ChatBox from "@/components/ChatBox";
 import VideoPlayer from "@/components/VideoPlayer";
 import CodeViewer from "@/components/CodeViewer";
-import { compileAnimation, getAnimationCode } from "@/api/animationApi";
+import { compileAnimation, getAnimationCode, pollVideoStatus } from "@/api/animationApi";
 
 const Dashboard = () => {
   const { logout, token } = useAuth();
@@ -37,21 +37,35 @@ const Dashboard = () => {
     try {
       setIsCompiling(true);
       setCodeViewerOpen(false);
-      
+
       const response = await compileAnimation(videoId, token!);
-      if (response.success) {
-        toast.success("Animation compiled successfully!");
-        // Store both URLs from the response
-        setVideoUrl(response.videoUrl);
-        setDownloadUrl(response.downloadUrl);
-        console.log("Video URL received:", response.videoUrl);
-        console.log("Download URL received:", response.downloadUrl);
-      } else {
-        toast.error("Failed to compile animation");
+      if (!response.success) {
+        toast.error("Failed to queue animation");
+        setIsCompiling(false);
+        return;
       }
+
+      toast.info("Queued! Rendering in the background...");
+
+      const stopPolling = pollVideoStatus(
+        videoId,
+        token!,
+        (videoUrl, downloadUrl) => {
+          toast.success("Animation compiled successfully!");
+          setVideoUrl(videoUrl);
+          setDownloadUrl(downloadUrl);
+          setIsCompiling(false);
+        },
+        (error) => {
+          toast.error(`Render failed: ${error}`);
+          setIsCompiling(false);
+        }
+      );
+
+      // Stop polling after 10 minutes as a safety net
+      setTimeout(stopPolling, 10 * 60 * 1000);
     } catch (error: any) {
       toast.error(error.message || "Failed to compile animation");
-    } finally {
       setIsCompiling(false);
     }
   };

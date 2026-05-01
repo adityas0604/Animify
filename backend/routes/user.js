@@ -13,10 +13,12 @@ const router = express.Router();
 const openai = require('../lib/openaiClient');
 
 const s3 = new AWS.S3({
-  accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-  secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+ // accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+ // secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   region: process.env.AWS_REGION,
 });
+
+const sqs = new AWS.SQS({ region: process.env.AWS_REGION });
 
 
 // GET /user/videos
@@ -80,7 +82,8 @@ router.post('/generate', authenticateToken, async (req, res) => {
       userId,
       prompt,
       script,
-      filename: '', // will be updated after compile
+      filename: '',
+      status: 'PENDING',
     },
   });
 
@@ -93,77 +96,78 @@ function extractSceneName(script) {
   return match ? match[1] : null;
 }
 
-// POST /user/compile
+// POST /user/compile — enqueues the render job to SQS and returns immediately
 router.post('/compile', authenticateToken, async (req, res) => {
   const { videoId } = req.body;
   const userId = req.user.userId;
 
   try {
-    // 1️⃣ Fetch the script from the database
     const video = await prisma.video.findUnique({ where: { id: videoId } });
 
     if (!video || video.userId !== userId) {
       return res.status(403).json({ error: 'Unauthorized or video not found' });
     }
 
-    // 2️⃣ Dynamically extract the scene name
     const sceneName = extractSceneName(video.script);
-
     if (!sceneName) {
       return res.status(400).json({ error: 'No scene class found in the script!' });
     }
 
-    // 3️⃣ Send render request to Python service
-    const response = await axios.post('http://localhost:8001/render', {
-      videoId: video.id,
-      script: video.script,
-      sceneName: sceneName
-    });
-
-    if (!response || !response.data.success) {
-      return res.status(500).json({ error: 'Rendering failed', details: response.data.error });
-    }
-
-    const { filename } = response.data;
-
-    // 4️⃣ Generate Streaming URL (for `<video>` tag)
-    const s3StreamParams = {
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: filename,
-      Expires: 3600 // 1 hour
-    };
-
-    const streamingUrl = s3.getSignedUrl('getObject', s3StreamParams);
-
-    // 5️⃣ Generate Download URL (forces download)
-    const s3DownloadParams = {
-      Bucket: process.env.S3_BUCKET_NAME,
-      Key: filename,
-      Expires: 3600,
-      ResponseContentDisposition: `attachment; filename="${filename.split('/').pop()}"`
-    };
-
-    const downloadUrl = s3.getSignedUrl('getObject', s3DownloadParams);
-
-    // 6️⃣ Update the video's filename in DB
     await prisma.video.update({
-      where: { id: video.id },
-      data: { filename: filename },
+      where: { id: videoId },
+      data: { status: 'QUEUED' },
     });
 
-    // 7️⃣ Return both URLs to the client
-    res.status(200).json({
-      success: true,
-      videoUrl: streamingUrl,
-      downloadUrl: downloadUrl
-    });
+    await sqs.sendMessage({
+      QueueUrl: process.env.SQS_QUEUE_URL,
+      MessageBody: JSON.stringify({ videoId, sceneName }),
+    }).promise();
 
+    res.status(200).json({ success: true, status: 'queued', videoId });
   } catch (err) {
-    console.log(err.message || err);
+    console.error(err.message || err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-module.exports = router;
+
+// GET /user/videos/:id/status — poll this until status is DONE or FAILED
+router.get('/videos/:id/status', authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const userId = req.user.userId;
+
+  try {
+    const video = await prisma.video.findUnique({ where: { id } });
+
+    if (!video || video.userId !== userId) {
+      return res.status(403).json({ error: 'Unauthorized or video not found' });
+    }
+
+    const result = { status: video.status, videoId: id };
+
+    if (video.status === 'DONE' && video.filename) {
+      result.videoUrl = s3.getSignedUrl('getObject', {
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: video.filename,
+        Expires: 3600,
+      });
+      result.downloadUrl = s3.getSignedUrl('getObject', {
+        Bucket: process.env.S3_BUCKET_NAME,
+        Key: video.filename,
+        Expires: 3600,
+        ResponseContentDisposition: `attachment; filename="${video.filename.split('/').pop()}"`,
+      });
+    }
+
+    if (video.status === 'FAILED') {
+      result.error = video.errorMsg;
+    }
+
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // GET /user/prompts
 router.get('/prompts', authenticateToken, async (req, res) => {

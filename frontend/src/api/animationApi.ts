@@ -7,8 +7,16 @@ interface GenerateResponse {
 
 interface CompileResponse {
   success: boolean;
-  videoUrl: string;
-  downloadUrl: string;
+  status: string;
+  videoId: string;
+}
+
+interface VideoStatus {
+  status: string;
+  videoId: string;
+  videoUrl?: string;
+  downloadUrl?: string;
+  error?: string;
 }
 
 interface CodeResponse {
@@ -108,6 +116,45 @@ export const getUserPrompts = async (token: string): Promise<Prompt[]> => {
   } catch (error: any) {
     throw new Error(error.message || "Failed to get prompts");
   }
+};
+
+export const getVideoStatus = async (videoId: string, token: string): Promise<VideoStatus> => {
+  try {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/user/videos/${videoId}/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.message || "Failed to get status");
+    }
+    return await response.json();
+  } catch (error: any) {
+    throw new Error(error.message || "Failed to get status");
+  }
+};
+
+export const pollVideoStatus = (
+  videoId: string,
+  token: string,
+  onDone: (videoUrl: string, downloadUrl: string) => void,
+  onFailed: (error: string) => void,
+  intervalMs = 3000
+): (() => void) => {
+  const id = setInterval(async () => {
+    try {
+      const result = await getVideoStatus(videoId, token);
+      if (result.status === "DONE" && result.videoUrl && result.downloadUrl) {
+        clearInterval(id);
+        onDone(result.videoUrl, result.downloadUrl);
+      } else if (result.status === "FAILED") {
+        clearInterval(id);
+        onFailed(result.error || "Render failed");
+      }
+    } catch {
+      // keep polling through transient network errors
+    }
+  }, intervalMs);
+  return () => clearInterval(id);
 };
 
 export const deleteUserPrompts = async (token: string): Promise<DeletePromptsResponse> => {
