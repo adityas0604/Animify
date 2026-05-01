@@ -9,7 +9,17 @@ const userRoutes = require('./routes/user');
 
 function makeHandler(mountPath, router) {
   const app = express();
-  app.use(cors());
+  app.use(cors( { origin: "*"}));
+  app.use((req, res, next) => {
+    if (req.apiGateway?.event?.body && typeof req.apiGateway.event.body === "string") {
+      try {
+        req.body = JSON.parse(req.apiGateway.event.body);
+      } catch {
+        req.body = req.apiGateway.event.body;
+      }
+    }
+    next();
+  });
   app.use(express.json());
   app.use(mountPath, router);
   return serverless(app);

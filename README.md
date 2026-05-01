@@ -17,7 +17,7 @@ Animify ("Prompt to Animate") turns natural-language prompts into **Manim** anim
                           ┌────────────────────────┐
                           │     AWS Lambda         │
                           │  (Express via handler) │
-                          │   backend/app.js       │
+                          │  backend/handler.js    │
                           └────────────┬───────────┘
                                        │
                     1. POST /user/generate
@@ -56,7 +56,7 @@ Animify ("Prompt to Animate") turns natural-language prompts into **Manim** anim
 | Component | Location | Role |
 |-----------|----------|------|
 | **Frontend** | `frontend/` | Chat UI, code viewer, video player. Polls render status after compile. |
-| **API Gateway** | AWS API Gateway | HTTP API entry point. Routes all requests to the Lambda function. |
+| **API Gateway** | AWS API Gateway | HTTP API entry point (`backend/serverless.yaml`). Routes requests to Lambda functions (`serverless-http` + Express). |
 | **Lambda** | AWS Lambda | Runs the Express app (`backend/`) as a serverless function. Handles auth, OpenAI generation, SQS enqueue, and presigned URLs. Scales to zero when idle. |
 | **Manim Worker** | `manim-rendrer/worker.py` | Long-polls SQS, runs `manim`, uploads MP4 to S3, updates DB status. Runs on EC2. |
 | **Database** | PostgreSQL via Prisma | `User` and `Video` models. `Video` tracks `status` (PENDING → QUEUED → PROCESSING → DONE / FAILED). |
@@ -103,20 +103,23 @@ worker.py loop
 ```
 Animify/
 ├── frontend/               # Vite + React + TypeScript + Tailwind (port 8080)
-├── backend/                # Express API + Prisma ORM (port 8000)
+├── backend/                # Express API + Prisma ORM + Serverless Lambda
+│   ├── app.js             # Local dev server (port 8000)
+│   ├── handler.js          # Lambda entry (Express via serverless-http)
+│   ├── serverless.yaml     # API deploy — Lambda + HTTP API routes
 │   ├── routes/
-│   │   ├── auth.js         # POST /auth/signup, /auth/login
-│   │   └── user.js         # All /user/* routes
+│   │   ├── auth.js        # POST /auth/signup, /auth/login
+│   │   └── user.js        # All /user/* routes
 │   ├── prisma/
-│   │   └── schema.prisma   # User, Video models
+│   │   └── schema.prisma  # User, Video models
 │   └── lib/
 │       └── openaiClient.js
-├── manim-rendrer/          # Render worker (EC2)
-│   ├── worker.py           # SQS consumer — main production worker
-│   ├── app.py              # FastAPI render endpoint (local dev only)
+├── manim-rendrer/         # Render worker (production: EC2)
+│   ├── worker.py           # SQS consumer — production worker
+│   ├── app.py             # FastAPI render endpoint (local dev only)
 │   └── requirements.txt
-├── serverless.yml          # EC2 worker deployment (Serverless Framework)
-└── EC2_WORKER_DEPLOYMENT.md
+├── EC2_WORKER_DEPLOYMENT.md  # Step-by-step: SQS, IAM, EC2, systemd, worker `.env`
+└── .gitignore
 ```
 
 ---
@@ -145,11 +148,12 @@ Animify/
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET` | Secret used to sign JWTs |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `AWS_ACCESS_KEY_ID` | AWS credentials |
-| `AWS_SECRET_ACCESS_KEY` | AWS credentials |
-| `AWS_REGION` | AWS region (e.g. `us-east-1`) |
+| `AWS_ACCESS_KEY_ID` | *(Local dev optional.)* Omit on Lambda — use execution role IAM only. |
+| `AWS_SECRET_ACCESS_KEY` | *(Local dev optional.)* Omit on Lambda. |
+| `AWS_REGION` | AWS region (e.g. `us-east-2`) |
 | `S3_BUCKET_NAME` | S3 bucket for rendered videos |
-| `SQS_QUEUE_URL` | SQS queue URL — get this after creating the queue |
+| `SQS_QUEUE_URL` | SQS queue URL — create queues per `EC2_WORKER_DEPLOYMENT.md` |
+| `SQS_QUEUE_ARN` | Queue ARN — required by `backend/serverless.yaml` for IAM `sqs:SendMessage` |
 
 ### Frontend — `frontend/.env`
 
@@ -227,65 +231,67 @@ Open **http://localhost:8080**, sign up, describe an animation, generate code, t
 
 ## Production Deployment
 
-### API — Lambda + API Gateway
+### API — Lambda + API Gateway (`backend/serverless.yaml`)
 
-The Express backend is wrapped with [`serverless-http`](https://github.com/dougmoscrop/serverless-http) and deployed as a Lambda function fronted by API Gateway. Every route in `backend/` runs as-is — no code changes required.
+The Express backend is wrapped with [`serverless-http`](https://github.com/dougmoscrop/serverless-http): each HTTP route invokes a Lambda that runs Express + your existing `routes/`. Packaging uses [`serverless-esbuild`](https://github.com/floydspace/serverless-esbuild).
 
 ```
 API Gateway HTTP API  →  Lambda (Express handler)  →  PostgreSQL / SQS / S3
 ```
 
-The Lambda function needs these environment variables set (via Lambda console or IaC):
+**Deploy:**
 
-| Variable | Value |
-|----------|-------|
+```bash
+cd backend
+# Ensure .env defines DATABASE_URL, JWT_SECRET, OPENAI_API_KEY, SQS_*, S3_BUCKET_NAME (see table above).
+npm install
+npx serverless deploy --stage dev
+```
+
+Configure `provider.httpApi.cors` in `serverless.yaml` so browsers can call your API cross-origin (`cors: true` is sufficient for broad dev; tighten `allowedOrigins` in production).
+
+Environment variables loaded for deploy correspond to **`backend/.env`** (see `useDotenv` / `provider.environment`). At minimum Lambda needs:
+
+| Variable | Purpose |
+|----------|---------|
 | `DATABASE_URL` | PostgreSQL connection string |
 | `JWT_SECRET` | JWT signing secret |
 | `OPENAI_API_KEY` | OpenAI API key |
-| `AWS_REGION` | AWS region |
-| `S3_BUCKET_NAME` | S3 bucket name |
-| `SQS_QUEUE_URL` | SQS queue URL |
+| `S3_BUCKET_NAME` | Bucket for uploads / presigned GET |
+| `SQS_QUEUE_URL` | `compile` enqueue target |
+| `SQS_QUEUE_ARN` | Used in IAM for `sqs:SendMessage` |
 
-> `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are not needed — attach an IAM execution role to the Lambda with `AmazonSQSFullAccess` and `AmazonS3FullAccess`.
+> **Prefer IAM over static keys:** do **not** set `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` on Lambda. Use the Lambda execution role for SQS and presigned S3 URLs (temporary `ASIA…` credentials with a session token). Set `AWS_REGION` implicitly via Lambda or as needed.
 
-After deployment, set `VITE_API_URL` in the frontend to the API Gateway invoke URL.
+After deploy, point `frontend/.env` at the printed invoke URL (`VITE_API_URL=https://<api-id>.execute-api.<region>.amazonaws.com`).
 
 ---
 
-### Worker — EC2
+### Worker — EC2 (Manim render)
 
-The worker is deployed to EC2 using the Serverless Framework. It provisions the IAM role, security group, and EC2 instance — the instance bootstraps itself completely via UserData on first boot.
+Production rendering runs **`manim-rendrer/worker.py`** on an **Ubuntu EC2** instance that **long-polls SQS**. It uses an **IAM instance profile** (`animify-worker-role` in the guide)—no AWS keys on the VM.
 
-**Install Serverless Framework:**
+**📄 Full procedure:** **`EC2_WORKER_DEPLOYMENT.md`** covers the flow end-to-end. Summary:
+
+| Step | What |
+|------|------|
+| SQS | Create **`animify-render-dlq`**, then **`animify-render-queue`** with DLQ (max receives `3`), visibility **`300`** s, receive wait **`20`** s |
+| IAM | Role **`animify-worker-role`** (EC2) with SQS + S3 access policies |
+| EC2 | Ubuntu 22.04, **`t3.medium`** or larger, attach instance profile + SSH SG |
+| Code | **`scp`** `manim-rendrer` to **`~/manim-rendrer`**, venv + `requirements.txt`, worker **`.env`** (`SQS_QUEUE_URL`, `DATABASE_URL`, `S3_BUCKET_NAME`, `AWS_REGION`) |
+| DB | Run Prisma migrations from **`backend/`** as documented in the guide |
+| Service | **`systemd`** unit **`animify-worker`** pointing at **`venv/bin/python worker.py`** |
+
+Operational commands (on EC2):
+
 ```bash
-npm install -g serverless
-```
-
-**Deploy:**
-```bash
-serverless deploy \
-  --param="repoUrl=https://github.com/your-org/animify" \
-  --param="databaseUrl=postgresql://user:pass@host:5432/dbname" \
-  --param="s3BucketName=your-s3-bucket" \
-  --param="sqsQueueUrl=https://sqs.us-east-1.amazonaws.com/account-id/animify-render-queue" \
-  --param="keyPairName=your-ec2-keypair"
-```
-
-The stack output prints the instance public IP. The worker starts automatically — no SSH required.
-
-**Verify it's running:**
-```bash
-ssh -i your-key.pem ubuntu@<InstancePublicIp>
 sudo systemctl status animify-worker
-sudo journalctl -u animify-worker -f   # live logs
+sudo journalctl -u animify-worker -f
 ```
 
-**Tear down:**
-```bash
-serverless remove
-```
+For code updates, **`scp`** changed files and **`sudo systemctl restart animify-worker`**.
 
-See `EC2_WORKER_DEPLOYMENT.md` for a full step-by-step guide including SQS queue setup.
+**Checklist** and queue names match the bottom of **`EC2_WORKER_DEPLOYMENT.md`**. Keep the API’s **`SQS_QUEUE_URL`** aligned with the same queue your worker polls.
 
 ---
 

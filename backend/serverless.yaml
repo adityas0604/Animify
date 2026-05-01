@@ -36,6 +36,9 @@ provider:
             - s3:GetObject
             - s3:DeleteObject
           Resource: arn:aws:s3:::${env:S3_BUCKET_NAME}/*
+  httpApi:
+    name: animify-backend-api
+    cors: true
 
 plugins:
   - serverless-esbuild
