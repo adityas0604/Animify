@@ -39,8 +39,7 @@ lerna-debug.log*
 .yarn/unplugged
 .yarn/build-state.yml
 .yarn/install-state.gz
-
-# Commit lockfiles (package-lock.json, yarn.lock) for reproducible installs.
+package-lock.json
 
 # ── Frontend (Vite) ────────────────────────────────────────────
 dist/

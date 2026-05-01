@@ -8,12 +8,19 @@ const jwt = require('jsonwebtoken');
 // The context object is forwarded to downstream handlers via
 // event.requestContext.authorizer.lambda.*
 exports.handler = async (event) => {
-  const token = event.headers?.authorization?.split(' ')[1];
-  if (!token) return { isAuthorized: false };
+  console.log("Authorizer event:", event);
+  const token = event.headers?.Authorization?.split(' ')[1] || event.headers?.authorization?.split(' ')[1];
+  console.log("Authorizer token:", token);
+  if (!token) {
+    console.log("Authorizer token NOT FOUND");
+    return { isAuthorized: false };
+  }
   try {
     const { userId } = jwt.verify(token, process.env.JWT_SECRET);
-    return { isAuthorized: true, context: { userId } };
-  } catch {
+    console.log("Authorizer token VERIFIED");
+    return { isAuthorized: true, context: { userId: String(userId) } };
+  } catch (error) {
+    console.log("Authorizer token VERIFICATION ERROR:", error);
     return { isAuthorized: false };
   }
 };

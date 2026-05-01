@@ -39,6 +39,17 @@ provider:
   httpApi:
     name: animify-backend-api
     cors: true
+    authorizers:
+      jwtAuthorizer:
+        type: request
+        functionName: jwtAuthorizer
+        enableSimpleResponses: true
+  logs:
+    httpApi:
+      format: '$context.requestId $context.routeKey $context.status $context.integrationStatus $context.integrationErrorMessage $context.authorizer.error'
+
+      
+
 
 plugins:
   - serverless-esbuild
@@ -83,7 +94,7 @@ functions:
   # Validates the JWT and injects userId into event.requestContext.authorizer.lambda
   # API Gateway calls this before any /user/* handler; failed auth never reaches the handler.
 
-  authorizer:
+  jwtAuthorizer:
     handler: handler.authorizer
 
   # ── Auth (public) ────────────────────────────────────────────────────────────
@@ -111,8 +122,7 @@ functions:
           path: /user/videos
           method: GET
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   getVideoStatus:
     handler: handler.getVideoStatus
@@ -121,8 +131,7 @@ functions:
           path: /user/videos/{id}/status
           method: GET
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   # ── User — script generation & compilation ───────────────────────────────────
 
@@ -134,8 +143,7 @@ functions:
           path: /user/generate
           method: POST
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   compile:
     handler: handler.compile
@@ -144,8 +152,7 @@ functions:
           path: /user/compile
           method: POST
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   # ── User — history & code ────────────────────────────────────────────────────
 
@@ -156,8 +163,7 @@ functions:
           path: /user/prompts
           method: GET
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   getCode:
     handler: handler.getCode
@@ -166,8 +172,7 @@ functions:
           path: /user/code
           method: GET
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
 
   clearHistory:
     handler: handler.clearHistory
@@ -176,5 +181,4 @@ functions:
           path: /user/clear-history
           method: DELETE
           authorizer:
-            name: authorizer
-            enableSimpleResponses: true
+            name: jwtAuthorizer
