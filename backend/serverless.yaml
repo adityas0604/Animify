@@ -79,7 +79,14 @@ package:
 
 functions:
 
-  # ── Auth ────────────────────────────────────────────────────────────────────
+  # ── Lambda Authorizer ────────────────────────────────────────────────────────
+  # Validates the JWT and injects userId into event.requestContext.authorizer.lambda
+  # API Gateway calls this before any /user/* handler; failed auth never reaches the handler.
+
+  authorizer:
+    handler: handler.authorizer
+
+  # ── Auth (public) ────────────────────────────────────────────────────────────
 
   signup:
     handler: handler.signup
@@ -103,6 +110,9 @@ functions:
       - httpApi:
           path: /user/videos
           method: GET
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   getVideoStatus:
     handler: handler.getVideoStatus
@@ -110,6 +120,9 @@ functions:
       - httpApi:
           path: /user/videos/{id}/status
           method: GET
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   # ── User — script generation & compilation ───────────────────────────────────
 
@@ -120,6 +133,9 @@ functions:
       - httpApi:
           path: /user/generate
           method: POST
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   compile:
     handler: handler.compile
@@ -127,6 +143,9 @@ functions:
       - httpApi:
           path: /user/compile
           method: POST
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   # ── User — history & code ────────────────────────────────────────────────────
 
@@ -136,6 +155,9 @@ functions:
       - httpApi:
           path: /user/prompts
           method: GET
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   getCode:
     handler: handler.getCode
@@ -143,6 +165,9 @@ functions:
       - httpApi:
           path: /user/code
           method: GET
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
 
   clearHistory:
     handler: handler.clearHistory
@@ -150,3 +175,6 @@ functions:
       - httpApi:
           path: /user/clear-history
           method: DELETE
+          authorizer:
+            name: authorizer
+            enableSimpleResponses: true
