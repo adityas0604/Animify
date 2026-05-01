@@ -39,14 +39,23 @@ lerna-debug.log*
 .yarn/unplugged
 .yarn/build-state.yml
 .yarn/install-state.gz
-
-# Commit lockfiles (package-lock.json, yarn.lock) for reproducible installs.
+package-lock.json
 
 # ── Frontend (Vite) ────────────────────────────────────────────
 dist/
 dist-ssr/
 *.local
 coverage/
+# Amplify CLI `publish` can leave timestamped deployment zips next to amplify/
+frontend/*.zip
+
+# ── AWS Amplify CLI (Gen1 — local cache & CFN build output) ─────
+# Folder name is literally #current-cloud-backend; escape leading # in .gitignore patterns.
+**/amplify/\#current-cloud-backend/
+**/amplify/.config/local-*
+**/amplify/backend/awscloudformation/build/
+**/amplify/logs/
+**/amplify/mock-data/
 
 # ── Backend / tooling ──────────────────────────────────────────
 .serverless/
@@ -84,3 +93,5 @@ logs/
 # ── Optional local SQLite / Prisma file DB ─────────────────────
 **/prisma/*.db
 **/prisma/*.db-journal
+
+EC2_WORKER_DEPLOYMENT.md

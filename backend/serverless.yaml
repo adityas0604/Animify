@@ -39,6 +39,17 @@ provider:
   httpApi:
     name: animify-backend-api
     cors: true
+    authorizers:
+      jwtAuthorizer:
+        type: request
+        functionName: jwtAuthorizer
+        enableSimpleResponses: true
+  logs:
+    httpApi:
+      format: '$context.requestId $context.routeKey $context.status $context.integrationStatus $context.integrationErrorMessage $context.authorizer.error'
+
+      
+
 
 plugins:
   - serverless-esbuild
@@ -79,7 +90,14 @@ package:
 
 functions:
 
-  # ── Auth ────────────────────────────────────────────────────────────────────
+  # ── Lambda Authorizer ────────────────────────────────────────────────────────
+  # Validates the JWT and injects userId into event.requestContext.authorizer.lambda
+  # API Gateway calls this before any /user/* handler; failed auth never reaches the handler.
+
+  jwtAuthorizer:
+    handler: handler.authorizer
+
+  # ── Auth (public) ────────────────────────────────────────────────────────────
 
   signup:
     handler: handler.signup
@@ -103,6 +121,8 @@ functions:
       - httpApi:
           path: /user/videos
           method: GET
+          authorizer:
+            name: jwtAuthorizer
 
   getVideoStatus:
     handler: handler.getVideoStatus
@@ -110,6 +130,8 @@ functions:
       - httpApi:
           path: /user/videos/{id}/status
           method: GET
+          authorizer:
+            name: jwtAuthorizer
 
   # ── User — script generation & compilation ───────────────────────────────────
 
@@ -120,6 +142,8 @@ functions:
       - httpApi:
           path: /user/generate
           method: POST
+          authorizer:
+            name: jwtAuthorizer
 
   compile:
     handler: handler.compile
@@ -127,6 +151,8 @@ functions:
       - httpApi:
           path: /user/compile
           method: POST
+          authorizer:
+            name: jwtAuthorizer
 
   # ── User — history & code ────────────────────────────────────────────────────
 
@@ -136,6 +162,8 @@ functions:
       - httpApi:
           path: /user/prompts
           method: GET
+          authorizer:
+            name: jwtAuthorizer
 
   getCode:
     handler: handler.getCode
@@ -143,6 +171,8 @@ functions:
       - httpApi:
           path: /user/code
           method: GET
+          authorizer:
+            name: jwtAuthorizer
 
   clearHistory:
     handler: handler.clearHistory
@@ -150,3 +180,5 @@ functions:
       - httpApi:
           path: /user/clear-history
           method: DELETE
+          authorizer:
+            name: jwtAuthorizer
