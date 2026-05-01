@@ -1,0 +1,134 @@
+service: animify-api
+frameworkVersion: '3'
+
+# Reads all variables from backend/.env automatically via serverless-dotenv-plugin.
+#
+# Required .env keys:
+#   DATABASE_URL, JWT_SECRET, OPENAI_API_KEY,
+#   SQS_QUEUE_URL, SQS_QUEUE_ARN, S3_BUCKET_NAME
+#
+# Deploy:
+#   cd backend
+#   npm install
+#   npm install --save-dev serverless serverless-offline serverless-plugin-scripts serverless-dotenv-plugin
+#   serverless deploy
+#
+# Tear down:
+#   serverless remove
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: ${env:AWS_REGION, 'us-east-1'}
+  environment:
+    DATABASE_URL: ${env:DATABASE_URL}
+    JWT_SECRET: ${env:JWT_SECRET}
+    OPENAI_API_KEY: ${env:OPENAI_API_KEY}
+    SQS_QUEUE_URL: ${env:SQS_QUEUE_URL}
+    S3_BUCKET_NAME: ${env:S3_BUCKET_NAME}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action: sqs:SendMessage
+          Resource: ${env:SQS_QUEUE_ARN}
+        - Effect: Allow
+          Action:
+            - s3:GetObject
+            - s3:DeleteObject
+          Resource: arn:aws:s3:::${env:S3_BUCKET_NAME}/*
+
+plugins:
+  - serverless-dotenv-plugin
+  - serverless-offline
+  - serverless-plugin-scripts
+
+custom:
+  # Regenerates the Prisma query engine binary for Lambda (AL2023 / OpenSSL 3)
+  # before the deployment package is assembled.
+  scripts:
+    hooks:
+      'before:package:createDeploymentArtifacts': npx prisma generate
+
+package:
+  patterns:
+    - '!.env'
+    - '!*.md'
+    - '!generated/**'
+    - '!manim/**'
+    - '!node_modules/.bin/**'
+    - '!prisma/migrations/**'
+
+functions:
+
+  # ── Auth ────────────────────────────────────────────────────────────────────
+
+  signup:
+    handler: handler.signup
+    events:
+      - httpApi:
+          path: /auth/signup
+          method: POST
+
+  login:
+    handler: handler.login
+    events:
+      - httpApi:
+          path: /auth/login
+          method: POST
+
+  # ── User — videos ────────────────────────────────────────────────────────────
+
+  getVideos:
+    handler: handler.getVideos
+    events:
+      - httpApi:
+          path: /user/videos
+          method: GET
+
+  getVideoStatus:
+    handler: handler.getVideoStatus
+    events:
+      - httpApi:
+          path: /user/videos/{id}/status
+          method: GET
+
+  # ── User — script generation & compilation ───────────────────────────────────
+
+  generate:
+    handler: handler.generate
+    timeout: 29   # OpenAI call — 29 s is the API Gateway HTTP API hard max
+    events:
+      - httpApi:
+          path: /user/generate
+          method: POST
+
+  compile:
+    handler: handler.compile
+    events:
+      - httpApi:
+          path: /user/compile
+          method: POST
+
+  # ── User — history & code ────────────────────────────────────────────────────
+
+  getPrompts:
+    handler: handler.getPrompts
+    events:
+      - httpApi:
+          path: /user/prompts
+          method: GET
+
+  getCode:
+    handler: handler.getCode
+    events:
+      - httpApi:
+          path: /user/code
+          method: GET
+
+  clearHistory:
+    handler: handler.clearHistory
+    events:
+      - httpApi:
+          path: /user/clear-history
+          method: DELETE
