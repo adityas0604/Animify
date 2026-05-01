@@ -46,6 +46,8 @@ dist/
 dist-ssr/
 *.local
 coverage/
+# Amplify CLI `publish` can leave timestamped deployment zips next to amplify/
+frontend/*.zip
 
 # ── AWS Amplify CLI (Gen1 — local cache & CFN build output) ─────
 # Folder name is literally #current-cloud-backend; escape leading # in .gitignore patterns.

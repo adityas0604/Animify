@@ -19,3 +19,6 @@ amplifytools.xcconfig
 .secret-*
 **.sample
 #amplify-do-not-edit-end
+
+# Amplify CLI manual publish artifact (numeric zip name / any zip at app root)
+*.zip
